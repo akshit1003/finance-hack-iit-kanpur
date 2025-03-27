@@ -31,22 +31,54 @@ router.post("/scrapper", async (req, res) => {
                 '--start-maximized',
                 '--remote-debugging-port=9222',
                 '--disable-web-security',
-                '--disable-features=IsolateOrigins,site-per-process'
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-extensions',
+                '--disable-software-rasterizer',
+                '--disable-notifications',
+                '--disable-popup-blocking',
+                '--disable-infobars',
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-site-isolation-trials'
             ],
             defaultViewport: null,
-            timeout: 60000
+            timeout: 120000, // Increased timeout to 2 minutes
+            executablePath: process.env.CHROME_BIN || null
         });
         console.log("Browser launched successfully");
         const page = await browser.newPage();
         
         // Set a longer timeout for navigation
-        page.setDefaultNavigationTimeout(60000);
+        page.setDefaultNavigationTimeout(120000); // Increased timeout to 2 minutes
+        
+        // Set user agent to avoid detection
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+        
+        // Add additional headers
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
+        });
+
+        // Enable JavaScript and cookies
+        await page.setJavaScriptEnabled(true);
         
         console.log("Navigating to screener.in login page...");
         await page.goto("https://www.screener.in/login/?", { 
             waitUntil: 'networkidle0',
-            timeout: 60000 
+            timeout: 120000 
         });
+        
+        // // Add random delay to simulate human behavior
+        // await delay(Math.random() * 2000 + 1000);
         
         // Wait for login form elements to be present
         console.log("Waiting for login form...");
@@ -54,7 +86,7 @@ router.post("/scrapper", async (req, res) => {
         await page.waitForSelector('#id_password', { timeout: 30000 });
         await page.waitForSelector('button.button-primary', { timeout: 30000 });
         
-        // Fill in login credentials
+        // Fill in login credentials with random delays
         console.log("Filling in login credentials...");
         await page.type('#id_username', process.env.USERNAME);
         await page.type('#id_password', process.env.PASSWORD);
@@ -63,18 +95,32 @@ router.post("/scrapper", async (req, res) => {
         console.log("Clicking login button...");
         await page.click('button.button-primary');
         
-        // Wait for navigation after login
+        // Wait for navigation after login with a more flexible approach
         console.log("Waiting for login to complete...");
-        await page.waitForNavigation({ 
-            waitUntil: 'networkidle0',
-            timeout: 60000 
-        });
+        try {
+            await page.waitForNavigation({ 
+                waitUntil: ['networkidle0', 'domcontentloaded'],
+                timeout: 120000 
+            });
+        } catch (error) {
+            console.log("Navigation timeout, checking if we're already logged in...");
+            // Check if we're already on the dashboard or if login was successful
+            const currentUrl = page.url();
+            if (!currentUrl.includes('/login/')) {
+                console.log("Already logged in, proceeding...");
+            } else {
+                throw error;
+            }
+        }
+
+        // // Add a small delay after login
+        // await delay(2000);
 
         // Navigate to the provided URL
         console.log(`Navigating to screener.in${url}...`);
         await page.goto(`https://www.screener.in${url}`, {
-            waitUntil: 'networkidle0',
-            timeout: 60000
+            waitUntil: ['networkidle0', 'domcontentloaded'],
+            timeout: 120000
         });
 
         // Wait for the company ratios section to load
