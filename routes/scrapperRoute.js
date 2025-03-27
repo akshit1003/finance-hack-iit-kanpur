@@ -175,8 +175,226 @@ router.post("/scrapper", async (req, res) => {
         });
 
         console.log("Ratios scraped successfully");
+
+        // Wait for the quarters section to load
+        console.log("Waiting for quarterly data to load...");
+        await page.waitForSelector('#quarters .data-table', { timeout: 30000 });
+
+        // Get profit-loss section data if available
+        console.log("Checking for profit-loss section...");
+        const hasProfitLossSection = await page.evaluate(() => {
+            return document.querySelector('#profit-loss') !== null;
+        });
+
+        let profitLossData = null;
+        if (hasProfitLossSection) {
+            console.log("Profit & Loss section found, getting data...");
+            
+            // Wait for the profit-loss section to load
+            await page.waitForSelector('#profit-loss .data-table', { timeout: 30000 });
+            
+            // Get the HTML content
+            const profitLossHtml = await page.content();
+            const $ProfitLoss = cheerio.load(profitLossHtml);
+            
+            profitLossData = {
+                headers: [],
+                rows: {}
+            };
+            
+            // Get headers (years)
+            $ProfitLoss('#profit-loss .data-table thead th').each((_, element) => {
+                const header = $ProfitLoss(element).text().trim();
+                if (header && header !== '') {
+                    profitLossData.headers.push(header);
+                }
+            });
+            
+            // Process all rows including nested ones
+            $ProfitLoss('#profit-loss .data-table tbody tr').each((_, element) => {
+                const $row = $ProfitLoss(element);
+                const $textCell = $row.find('td.text');
+                
+                // Check if this is a row with text content
+                if ($textCell.length) {
+                    const rowName = $textCell.text().trim().replace(/\s*[-+]\s*$/, ''); // Remove the +/- icons
+                    const isPadded = $textCell.attr('style') && $textCell.attr('style').includes('padding-left');
+                    
+                    // Create proper key based on padding (for nested items)
+                    let rowKey = rowName;
+                    if (isPadded) {
+                        rowKey = `_nested_${rowName}`;
+                    }
+                    
+                    if (rowName && rowName !== '') {
+                        profitLossData.rows[rowKey] = [];
+                        $row.find('td:not(.text)').each((_, cell) => {
+                            profitLossData.rows[rowKey].push($ProfitLoss(cell).text().trim());
+                        });
+                    }
+                }
+            });
+            
+            console.log("Profit & Loss data scraped successfully");
+        } else {
+            console.log("No Profit & Loss section found");
+        }
+
+        // Function to click expandable buttons and get additional data
+        const getExpandedData = async () => {
+            const expandedData = {};
+            
+            // Find all expandable buttons using a more reliable selector
+            console.log("Finding expandable buttons...");
+            const expandableButtons = await page.$$('#quarters .data-table tbody tr td.text button.button-plain');
+            console.log(`Found ${expandableButtons.length} expandable buttons`);
+            
+            for (let i = 0; i < expandableButtons.length; i++) {
+                const button = expandableButtons[i];
+                try {
+                    // Get the button text and onclick attribute
+                    const buttonData = await button.evaluate(el => ({
+                        text: el.textContent.trim(),
+                        onclick: el.getAttribute('onclick')
+                    }));
+                    
+                    // Extract schedule name from onclick attribute
+                    const match = buttonData.onclick.match(/Company\.showSchedule\('([^']+)'/);
+                    const scheduleName = match ? match[1] : buttonData.text.split('+')[0].trim();
+                    
+                    console.log(`Clicking expandable button ${i+1}/${expandableButtons.length} for: ${scheduleName}`);
+                    
+                    // Click the button
+                    await Promise.all([
+                        button.click(),
+                        page.waitForSelector('.responsive-holder[data-segment-table] table', { 
+                            visible: true, 
+                            timeout: 10000 
+                        })
+                    ]);
+                    
+                    console.log(`Expanded content loaded for ${scheduleName}`);
+                    
+                    // Get the expanded table data
+                    const expandedHtml = await page.content();
+                    const $expanded = cheerio.load(expandedHtml);
+                    
+                    // Find the expanded table in the responsive-holder
+                    const expandedTable = $expanded('.responsive-holder[data-segment-table] table');
+                    if (expandedTable.length) {
+                        console.log(`Found expanded table for ${scheduleName}`);
+                        const scheduleData = {
+                            headers: [],
+                            rows: {}
+                        };
+                        
+                        // Get headers
+                        expandedTable.find('thead th').each((_, element) => {
+                            const header = $expanded(element).text().trim();
+                            if (header && header !== '') {
+                                scheduleData.headers.push(header);
+                            }
+                        });
+                        
+                        // Get rows - handle both direct rows and nested rows with padding
+                        expandedTable.find('tbody tr').each((_, element) => {
+                            const $row = $expanded(element);
+                            const $textCell = $row.find('td.text');
+                            
+                            // Check if this is a row with text content
+                            if ($textCell.length) {
+                                const rowName = $textCell.text().trim();
+                                const isPadded = $textCell.attr('style') && $textCell.attr('style').includes('padding-left');
+                                
+                                // Create proper key based on padding (for nested items)
+                                let rowKey = rowName;
+                                if (isPadded) {
+                                    rowKey = `_nested_${rowName}`;
+                                }
+                                
+                                if (rowName) {
+                                    scheduleData.rows[rowKey] = [];
+                                    $row.find('td:not(.text)').each((_, cell) => {
+                                        scheduleData.rows[rowKey].push($expanded(cell).text().trim());
+                                    });
+                                }
+                            }
+                        });
+                        
+                        expandedData[scheduleName] = scheduleData;
+                        console.log(`Added data for ${scheduleName}`);
+                    } else {
+                        console.log(`No expanded table found for ${scheduleName}`);
+                    }
+                    
+                    // Click the close button if it exists
+                    console.log(`Closing expanded section for ${scheduleName}`);
+                    const closeButton = await page.$(`button[data-segment-button-close]`);
+                    if (closeButton) {
+                        await closeButton.click();
+                        await page.waitForFunction(
+                            () => {
+                                const element = document.querySelector('.responsive-holder[data-segment-table] table');
+                                return !element || window.getComputedStyle(element).display === 'none';
+                            },
+                            { timeout: 10000 }
+                        );
+                        console.log(`Closed expanded section for ${scheduleName}`);
+                    } else {
+                        console.log(`No close button found for ${scheduleName}`);
+                    }
+                } catch (error) {
+                    console.error(`Error expanding data for button ${i+1}: ${error.message}`);
+                    // Try to close the section if it's still open
+                    try {
+                        const closeButton = await page.$(`button[data-segment-button-close]`);
+                        if (closeButton) {
+                            await closeButton.click();
+                        }
+                    } catch (closeError) {
+                        console.error('Error closing section:', closeError.message);
+                    }
+                }
+            }
+            
+            return expandedData;
+        };
+
+        // Get expanded data
+        console.log("Getting expanded data...");
+        const expandedData = await getExpandedData();
+
+        // Get the main quarterly data
+        const htmlQuarterly = await page.content();
+        const $Quarterly = cheerio.load(htmlQuarterly);
+        const quarterlyData = {
+            headers: [],
+            rows: {},
+            expandedData
+        };
+
+        // Get headers (quarter dates)
+        $('#quarters .data-table thead th').each((_, element) => {
+            const header = $(element).text().trim();
+            if (header && header !== '') {
+                quarterlyData.headers.push(header);
+            }
+        });
+
+        // Get rows data
+        $('#quarters .data-table tbody tr').each((_, element) => {
+            const rowName = $(element).find('td.text').text().trim();
+            if (rowName && rowName !== 'Raw PDF') {
+                quarterlyData.rows[rowName] = [];
+                $(element).find('td:not(.text)').each((_, cell) => {
+                    quarterlyData.rows[rowName].push($(cell).text().trim());
+                });
+            }
+        });
+
+        console.log("Quarterly data scraped successfully");
         await browser.close();
-        res.json(ratios);
+        res.json({ ratios, quarterlyData, profitLossData });
     } catch (error) {
         console.error("Error in scrapper route:", error);
         if (browser) {
