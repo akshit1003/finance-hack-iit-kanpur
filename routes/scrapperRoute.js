@@ -1,6 +1,7 @@
 import express from "express";
 import puppeteer from "puppeteer";
 import dotenv from "dotenv";
+import * as cheerio from "cheerio";
 
 dotenv.config();
 
@@ -19,7 +20,7 @@ router.post("/scrapper", async (req, res) => {
 
         console.log("Starting puppeteer in Docker...");
         browser = await puppeteer.launch({
-            headless: false,
+            headless: "new",
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -75,14 +76,61 @@ router.post("/scrapper", async (req, res) => {
             waitUntil: 'networkidle0',
             timeout: 60000
         });
+
+        // Wait for the company ratios section to load
+        console.log("Waiting for company ratios to load...");
+        await page.waitForSelector('.company-ratios', { timeout: 30000 });
+
+        // Get the HTML content
+        const html = await page.content();
         
-        // Additional delay to ensure page is fully loaded
-        await delay(5000);
-        
-        const content = await page.content();
-        console.log("Content retrieved, closing browser...");
+        // Load HTML into cheerio
+        const $ = cheerio.load(html);
+        const ratios = {};
+
+        // Parse the ratios using cheerio
+        $('.company-ratios #top-ratios li').each((_, element) => {
+            const name = $(element).find('.name').text().trim();
+            const valueElement = $(element).find('.value');
+            
+            if (valueElement.length) {
+                // Get all number spans
+                const numbers = valueElement.find('.number').map((_, el) => $(el).text().trim()).get();
+                
+                // Get the text content excluding the number spans
+                let textContent = valueElement.text().trim();
+                numbers.forEach(num => {
+                    textContent = textContent.replace(num, '');
+                });
+                
+                // Clean up the text content
+                textContent = textContent
+                    .replace(/\n/g, '') // Remove newlines
+                    .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+                    .replace(/₹/g, '') // Remove rupee symbol
+                    .replace(/\/\s*\/\s*/, '/') // Clean up double slashes
+                    .trim();
+                
+                // Combine numbers and text
+                let value = numbers.join(' / ');
+                if (textContent) {
+                    value += ' ' + textContent;
+                }
+                
+                // Clean up the final value
+                value = value
+                    .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+                    .trim();
+                
+                if (name && value) {
+                    ratios[name] = value;
+                }
+            }
+        });
+
+        console.log("Ratios scraped successfully");
         await browser.close();
-        res.send(content);
+        res.json(ratios);
     } catch (error) {
         console.error("Error in scrapper route:", error);
         if (browser) {
