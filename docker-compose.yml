@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   backend:
     build: .
@@ -7,8 +6,6 @@ services:
     volumes:
       - .:/app  # Mounts your local project to the container
       - /app/node_modules  # Prevents overwriting node_modules inside the container
-      - /tmp/.X11-unix:/tmp/.X11-unix  # Mount X11 socket
     environment:
       - NODE_ENV=development
-      - DISPLAY=${DISPLAY}  # Pass display variable
     command: ["npx", "nodemon", "-L", "server.js"]  # -L ensures nodemon detects changes in Docker

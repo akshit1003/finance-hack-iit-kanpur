@@ -1,7 +1,7 @@
 # Use the latest stable Node.js image
 FROM node:22
 
-# Install Chrome dependencies and X11
+# Install Chrome dependencies
 RUN apt-get update && apt-get install -y \
     libnss3 \
     libnspr4 \
@@ -20,8 +20,6 @@ RUN apt-get update && apt-get install -y \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
     libgtk-3-0 \
-    xvfb \
-    x11-xserver-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory inside the container
@@ -39,5 +37,5 @@ COPY . .
 # Expose the port
 EXPOSE 3000
 
-# Start Xvfb and then the app
-CMD Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 & export DISPLAY=:99 && npx nodemon -L server.js
+# Start the app
+CMD ["npx", "nodemon", "-L", "server.js"]
