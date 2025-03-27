@@ -1,1 +1,1 @@
-# finance-hack -iit-kanpur
+# finance-hack-iit-kanpur
