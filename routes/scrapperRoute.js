@@ -9,6 +9,103 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const router = express.Router();
 
+router.get("/search/:p", async (req, res) => {
+    let browser;
+    try {
+        const searchParam = req.params.p;
+        
+        if (!searchParam) {
+            return res.status(400).send("Search parameter is required");
+        }
+
+        console.log(`Starting search for: ${searchParam}`);
+        browser = await puppeteer.launch({
+            headless: "new",
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--window-size=1920,1080',
+            ],
+            defaultViewport: null,
+            timeout: 60000,
+            executablePath: process.env.CHROME_BIN || null
+        });
+        
+        const page = await browser.newPage();
+        
+        // Set user agent to avoid detection
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+        
+        // Navigate to screener.in
+        await page.goto("https://www.screener.in", { 
+            waitUntil: 'networkidle0',
+            timeout: 60000 
+        });
+        
+        // Wait for the search bar to be available
+        await page.waitForSelector('.home-search > div:nth-child(1) > input:nth-child(2)', { timeout: 10000 });
+        
+        // Focus on the search input and type the search parameter
+        await page.focus('.home-search > div:nth-child(1) > input:nth-child(2)');
+        await page.type('.home-search > div:nth-child(1) > input:nth-child(2)', searchParam);
+        
+        // Wait for the dropdown to appear
+        await page.waitForSelector('.home-search > div:nth-child(1) > ul:nth-child(3)', { 
+            visible: true, 
+            timeout: 10000 
+        });
+        
+        // Allow a moment for results to fully load
+        await delay(1000);
+        
+        // Get the dropdown results
+        const dropdownResults = await page.evaluate(() => {
+            const results = [];
+            const dropdown = document.querySelector('.home-search > div:nth-child(1) > ul:nth-child(3)');
+            if (dropdown) {
+                const items = dropdown.querySelectorAll('li');
+                items.forEach(item => {
+                    // Check if this is a "Search everywhere" item
+                    if (item.textContent.includes('Search everywhere')) {
+                        results.push({
+                            name: item.textContent.trim(),
+                            isSearchEverywhere: true,
+                            url: null
+                        });
+                    } else {
+                        // Company item
+                        const href = item.classList.contains('active') ? 
+                            `/company/${item.textContent.trim().toLowerCase().replace(/\s+/g, '-')}/` : null;
+                        
+                        results.push({
+                            name: item.textContent.trim(),
+                            isSearchEverywhere: false,
+                            url: href
+                        });
+                    }
+                });
+            }
+            return results;
+        });
+        
+        // Take a screenshot for debugging (optional)
+        // await page.screenshot({ path: 'search-results.png' });
+        
+        console.log(`Found ${dropdownResults.length} search results`);
+        await browser.close();
+        res.json({ results: dropdownResults });
+    } catch (error) {
+        console.error("Error in search route:", error);
+        if (browser) {
+            await browser.close();
+        }
+        res.status(500).send(`Search error: ${error.message}`);
+    }
+});
+
 router.post("/scrapper", async (req, res) => {
     let browser;
     try {
