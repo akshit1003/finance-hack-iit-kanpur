@@ -535,10 +535,51 @@ router.post("/scrapper", async (req, res) => {
         });
 
         console.log("Balance Sheet data scraped successfully");
+
+        // Wait for the cash-flow section to load
+        console.log("Waiting for cash flow section to load...");
+        await page.waitForSelector('#cash-flow', { timeout: 30000 });
+        
+        // Get updated HTML content for cash flow
+        const cfHtml = await page.content();
+        const $cf = cheerio.load(cfHtml);
+        
+        // Initialize cash flow data structure
+        const cashFlow = {
+            periods: [],
+            data: {}
+        };
+
+        // Get all year periods (column headers)
+        $cf('#cash-flow .data-table thead th').each((index, element) => {
+            if (index > 0) { // Skip the first header which is empty
+                cashFlow.periods.push($cf(element).text().trim());
+            }
+        });
+
+        // Process each row of cash flow data
+        $cf('#cash-flow .data-table tbody tr').each((rowIndex, row) => {
+            const metricName = $cf(row).find('td').first().text().trim();
+            
+            // Clean up metric name by removing the + symbol if present
+            const cleanMetricName = metricName.replace(/\+$/, '').trim();
+            
+            // Initialize array for this metric
+            cashFlow.data[cleanMetricName] = [];
+            
+            // Get all values for this metric
+            $cf(row).find('td').each((cellIndex, cell) => {
+                if (cellIndex > 0) { // Skip the first cell which is the metric name
+                    cashFlow.data[cleanMetricName].push($cf(cell).text().trim());
+                }
+            });
+        });
+
+        console.log("Cash Flow data scraped successfully");
         await browser.close();
         
         // Return all scraped data
-        res.json({ ratios, quarters, peers, profitLoss, balanceSheet });
+        res.json({ ratios, quarters, peers, profitLoss, balanceSheet, cashFlow });
     } catch (error) {
         console.error("Error in scrapper route:", error);
         if (browser) {
