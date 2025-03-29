@@ -18,8 +18,9 @@ router.get("/search/:p", async (req, res) => {
             return res.status(400).send("Search parameter is required");
         }
 
+        console.log(`Starting search for: ${searchParam}`);
         browser = await puppeteer.launch({
-            headless: false,
+            headless: "new",
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -52,6 +53,10 @@ router.get("/search/:p", async (req, res) => {
             timeout: 10000 
         });
         
+        await delay(2000);
+        
+        await page.waitForNetworkIdle({ timeout: 5000 });
+        
         await delay(1000);
         
         const dropdownResults = await page.evaluate(() => {
@@ -67,8 +72,15 @@ router.get("/search/:p", async (req, res) => {
                             url: null
                         });
                     } else {
-                        const href = item.classList.contains('active') ? 
-                            `/company/${item.textContent.trim().toLowerCase().replace(/\s+/g, '-')}/` : null;
+                        let href = null;
+                        const link = item.querySelector('a');
+                        if (link) {
+                            href = link.getAttribute('href');
+                        }
+                        if (!href) {
+                            const name = item.textContent.trim();
+                            href = `/company/${name.toLowerCase().replace(/\s+/g, '-')}/`;
+                        }
                         
                         results.push({
                             name: item.textContent.trim(),
@@ -81,6 +93,8 @@ router.get("/search/:p", async (req, res) => {
             return results;
         });
         
+        console.log(`Found ${dropdownResults.length} search results`);
+        console.log('Results:', JSON.stringify(dropdownResults, null, 2));
         await browser.close();
         res.json({ results: dropdownResults });
     } catch (error) {
@@ -101,8 +115,9 @@ router.post("/scrapper", async (req, res) => {
             return res.status(400).send("name is required in the request body");
         }
 
+        console.log("Starting puppeteer in Docker...");
         browser = await puppeteer.launch({
-            headless: "new",
+            headless: false,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -127,6 +142,7 @@ router.post("/scrapper", async (req, res) => {
             timeout: 120000, 
             executablePath: process.env.CHROME_BIN || null
         });
+        console.log("Browser launched successfully");
         
         const page = await browser.newPage();
         page.setDefaultNavigationTimeout(120000); 
@@ -148,25 +164,32 @@ router.post("/scrapper", async (req, res) => {
 
         await page.setJavaScriptEnabled(true);
         
+        console.log("Navigating to screener.in login page...");
         await page.goto("https://www.screener.in/login/?", { 
             waitUntil: 'networkidle0',
             timeout: 120000 
         });
         
+        console.log("Waiting for login form...");
         await page.waitForSelector('#id_username', { timeout: 30000 });
         await page.waitForSelector('#id_password', { timeout: 30000 });
         await page.waitForSelector('button.button-primary', { timeout: 30000 });
         
+        console.log("Filling in login credentials...");
         await page.type('#id_username', process.env.USERNAME);
         await page.type('#id_password', process.env.PASSWORD);
+        
+        console.log("Clicking login button...");
         await page.click('button.button-primary');
         
+        console.log("Waiting for login to complete...");
         try {
             await page.waitForNavigation({ 
                 waitUntil: ['networkidle0', 'domcontentloaded'],
                 timeout: 120000 
             });
         } catch (error) {
+            console.log("Navigation timeout, checking if we're already logged in...");
             const currentUrl = page.url();
             if (!currentUrl.includes('/login/')) {
                 console.log("Already logged in, proceeding...");
@@ -175,19 +198,26 @@ router.post("/scrapper", async (req, res) => {
             }
         }
 
+        console.log("Waiting for search box...");
         await page.waitForSelector('#desktop-search > div > input', { timeout: 30000 });
+        
+        console.log(`Typing company name: ${name}`);
         await page.focus('#desktop-search > div > input');
         await page.$eval('#desktop-search > div > input', el => el.value = '');
         await page.type('#desktop-search > div > input', name);
         
+        console.log("Waiting for search dropdown...");
         await page.waitForSelector('.dropdown-content li.active', { 
             visible: true, 
             timeout: 10000 
         });
         
         await delay(1000);
+        
+        console.log("Clicking the first active result...");
         await page.click('.dropdown-content li.active');
         
+        console.log("Waiting for company page to load...");
         try {
             await Promise.race([
                 page.waitForSelector('.company-ratios', { timeout: 30000 }),
@@ -198,17 +228,24 @@ router.post("/scrapper", async (req, res) => {
             
             const currentUrl = page.url();
             if (!currentUrl.includes('/company/')) {
+                console.log("Not on company page, retrying...");
                 await page.click('.dropdown-content li.active');
                 await delay(2000);
             }
         } catch (error) {
+            console.log("Error waiting for company page:", error);
             await page.screenshot({ path: 'error-state.png' });
             throw error;
         }
 
         const html = await page.content();
+        console.log("HTML content length:", html.length);
+        
         const $ = cheerio.load(html);
         const ratios = {};
+
+        const ratioElements = $('.company-ratios #top-ratios li');
+        console.log(`Found ${ratioElements.length} ratio elements`);
 
         $('.company-ratios #top-ratios li').each((_, element) => {
             const name = $(element).find('.name').text().trim();
@@ -240,10 +277,13 @@ router.post("/scrapper", async (req, res) => {
                 
                 if (name && value) {
                     ratios[name] = value;
+                    console.log(`Scraped ratio: ${name} = ${value}`);
                 }
             }
         });
 
+        console.log("Ratios scraped successfully");
+        console.log("Total ratios found:", Object.keys(ratios).length);
         await browser.close();
         res.json({ ratios });
     } catch (error) {
