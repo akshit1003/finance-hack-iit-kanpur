@@ -337,10 +337,103 @@ router.post("/scrapper", async (req, res) => {
         });
 
         console.log("Quarterly data scraped successfully");
+
+        // Wait for the peers section to load
+        console.log("Waiting for peers section to load...");
+        await page.waitForSelector('#peers', { timeout: 30000 });
+        
+        // Get updated HTML content for peers
+        const peersHtml = await page.content();
+        const $peers = cheerio.load(peersHtml);
+        
+        // Initialize peers data structure
+        const peers = {
+            headers: [],
+            companies: []
+        };
+
+        // Get the table headers (metrics)
+        $peers('#peers .data-table th').each((index, element) => {
+            // Skip the first two headers which are S.No. and Name
+            if (index > 1) {
+                const headerText = $peers(element).text().trim();
+                // Extract the main header without the unit
+                const mainHeader = headerText.split('\n')[0].trim();
+                // Extract the unit if present
+                const unitMatch = headerText.match(/\s*([^\.]+)\.?\s*$/);
+                const unit = unitMatch && unitMatch[1] ? unitMatch[1].trim() : '';
+                
+                peers.headers.push({
+                    name: mainHeader,
+                    unit: unit,
+                    tooltip: $peers(element).attr('data-tooltip') || mainHeader
+                });
+            }
+        });
+
+        // Get data for each peer company
+        $peers('#peers .data-table tbody tr[data-row-company-id]').each((rowIndex, row) => {
+            const companyId = $peers(row).attr('data-row-company-id');
+            const companyName = $peers(row).find('td.text a').text().trim();
+            const companyUrl = $peers(row).find('td.text a').attr('href');
+            
+            const companyData = {
+                id: companyId,
+                name: companyName,
+                url: companyUrl,
+                metrics: {}
+            };
+            
+            // Get all values for this company (skip first two cells which are S.No. and Name)
+            let metricIndex = 0;
+            $peers(row).find('td').each((cellIndex, cell) => {
+                if (cellIndex > 1) { // Skip S.No and Name columns
+                    if (metricIndex < peers.headers.length) {
+                        const metricName = peers.headers[metricIndex].name;
+                        companyData.metrics[metricName] = $peers(cell).text().trim();
+                        metricIndex++;
+                    }
+                }
+            });
+            
+            peers.companies.push(companyData);
+        });
+
+        // Get median values if present
+        const medianRow = $peers('#peers .data-table tfoot tr');
+        if (medianRow.length) {
+            const medianData = {
+                name: "Median",
+                metrics: {}
+            };
+            
+            // Get all median values (skip first two cells)
+            let metricIndex = 0;
+            medianRow.find('td').each((cellIndex, cell) => {
+                if (cellIndex > 1) { // Skip empty cell and "Median" text
+                    if (metricIndex < peers.headers.length) {
+                        const metricName = peers.headers[metricIndex].name;
+                        medianData.metrics[metricName] = $peers(cell).text().trim();
+                        metricIndex++;
+                    }
+                }
+            });
+            
+            // Add sector/industry info
+            const sectorText = $peers('#peers .sub a').first().text().trim();
+            const industryText = $peers('#peers .sub a').last().text().trim();
+            
+            medianData.sector = sectorText;
+            medianData.industry = industryText;
+            
+            peers.median = medianData;
+        }
+
+        console.log("Peer comparison data scraped successfully");
         await browser.close();
         
-        // Return both ratios and quarterly data
-        res.json({ ratios, quarters });
+        // Return ratios, quarters and peers data
+        res.json({ ratios, quarters, peers });
     } catch (error) {
         console.error("Error in scrapper route:", error);
         if (browser) {
