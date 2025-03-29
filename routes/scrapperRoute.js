@@ -294,8 +294,53 @@ router.post("/scrapper", async (req, res) => {
 
         console.log("Ratios scraped successfully");
         console.log("Total ratios found:", Object.keys(ratios).length);
+
+        console.log("Waiting for quarters section to load...");
+        await page.waitForSelector('#quarters', { timeout: 30000 });
+        
+        // Get updated HTML content for quarters
+        const quarterHtml = await page.content();
+        const $quarters = cheerio.load(quarterHtml);
+        
+        // Initialize quarters data structure
+        const quarters = {
+            periods: [],
+            data: {}
+        };
+
+        // Get all quarter periods (column headers)
+        $quarters('#quarters .data-table thead th').each((index, element) => {
+            if (index > 0) { // Skip the first header which is empty
+                quarters.periods.push($quarters(element).text().trim());
+            }
+        });
+
+        // Process each row of quarterly data
+        $quarters('#quarters .data-table tbody tr').each((rowIndex, row) => {
+            // Skip the last row which contains PDF links
+            if (!$quarters(row).find('td').first().text().includes('Raw PDF')) {
+                const metricName = $quarters(row).find('td').first().text().trim();
+                
+                // Clean up metric name by removing the + symbol if present
+                const cleanMetricName = metricName.replace(/\+$/, '').trim();
+                
+                // Initialize array for this metric
+                quarters.data[cleanMetricName] = [];
+                
+                // Get all values for this metric
+                $quarters(row).find('td').each((cellIndex, cell) => {
+                    if (cellIndex > 0) { // Skip the first cell which is the metric name
+                        quarters.data[cleanMetricName].push($quarters(cell).text().trim());
+                    }
+                });
+            }
+        });
+
+        console.log("Quarterly data scraped successfully");
         await browser.close();
-        res.json({ ratios });
+        
+        // Return both ratios and quarterly data
+        res.json({ ratios, quarters });
     } catch (error) {
         console.error("Error in scrapper route:", error);
         if (browser) {
