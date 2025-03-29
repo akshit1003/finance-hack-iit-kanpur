@@ -430,10 +430,74 @@ router.post("/scrapper", async (req, res) => {
         }
 
         console.log("Peer comparison data scraped successfully");
+
+        // Wait for the profit-loss section to load
+        console.log("Waiting for profit-loss section to load...");
+        await page.waitForSelector('#profit-loss', { timeout: 30000 });
+        
+        // Get updated HTML content for profit & loss
+        const plHtml = await page.content();
+        const $pl = cheerio.load(plHtml);
+        
+        // Initialize profit & loss data structure
+        const profitLoss = {
+            periods: [],
+            data: {},
+            growth: {
+                sales: {},
+                profit: {},
+                stockPrice: {},
+                roe: {}
+            }
+        };
+
+        // Get all year periods (column headers)
+        $pl('#profit-loss .data-table thead th').each((index, element) => {
+            if (index > 0) { // Skip the first header which is empty
+                profitLoss.periods.push($pl(element).text().trim());
+            }
+        });
+
+        // Process each row of P&L data
+        $pl('#profit-loss .data-table tbody tr').each((rowIndex, row) => {
+            const metricName = $pl(row).find('td').first().text().trim();
+            
+            // Clean up metric name by removing the + symbol if present
+            const cleanMetricName = metricName.replace(/\+$/, '').trim();
+            
+            // Initialize array for this metric
+            profitLoss.data[cleanMetricName] = [];
+            
+            // Get all values for this metric
+            $pl(row).find('td').each((cellIndex, cell) => {
+                if (cellIndex > 0) { // Skip the first cell which is the metric name
+                    profitLoss.data[cleanMetricName].push($pl(cell).text().trim());
+                }
+            });
+        });
+
+        // Extract growth tables data (Compounded Sales Growth, Profit Growth, etc.)
+        const extractGrowthData = (tableIndex, targetObj) => {
+            $pl('#profit-loss .ranges-table').eq(tableIndex).find('tr').each((rowIndex, row) => {
+                if (rowIndex > 0) { // Skip header row
+                    const period = $pl(row).find('td').first().text().trim().replace(':', '');
+                    const value = $pl(row).find('td').last().text().trim();
+                    targetObj[period] = value;
+                }
+            });
+        };
+
+        // Extract data from each growth table
+        extractGrowthData(0, profitLoss.growth.sales);
+        extractGrowthData(1, profitLoss.growth.profit);
+        extractGrowthData(2, profitLoss.growth.stockPrice);
+        extractGrowthData(3, profitLoss.growth.roe);
+
+        console.log("Profit & Loss data scraped successfully");
         await browser.close();
         
-        // Return ratios, quarters and peers data
-        res.json({ ratios, quarters, peers });
+        // Return all scraped data
+        res.json({ ratios, quarters, peers, profitLoss });
     } catch (error) {
         console.error("Error in scrapper route:", error);
         if (browser) {
