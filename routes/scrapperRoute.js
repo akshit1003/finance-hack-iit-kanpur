@@ -494,10 +494,51 @@ router.post("/scrapper", async (req, res) => {
         extractGrowthData(3, profitLoss.growth.roe);
 
         console.log("Profit & Loss data scraped successfully");
+
+        // Wait for the balance-sheet section to load
+        console.log("Waiting for balance sheet section to load...");
+        await page.waitForSelector('#balance-sheet', { timeout: 30000 });
+        
+        // Get updated HTML content for balance sheet
+        const bsHtml = await page.content();
+        const $bs = cheerio.load(bsHtml);
+        
+        // Initialize balance sheet data structure
+        const balanceSheet = {
+            periods: [],
+            data: {}
+        };
+
+        // Get all year periods (column headers)
+        $bs('#balance-sheet .data-table thead th').each((index, element) => {
+            if (index > 0) { // Skip the first header which is empty
+                balanceSheet.periods.push($bs(element).text().trim());
+            }
+        });
+
+        // Process each row of balance sheet data
+        $bs('#balance-sheet .data-table tbody tr').each((rowIndex, row) => {
+            const metricName = $bs(row).find('td').first().text().trim();
+            
+            // Clean up metric name by removing the + symbol if present
+            const cleanMetricName = metricName.replace(/\+$/, '').trim();
+            
+            // Initialize array for this metric
+            balanceSheet.data[cleanMetricName] = [];
+            
+            // Get all values for this metric
+            $bs(row).find('td').each((cellIndex, cell) => {
+                if (cellIndex > 0) { // Skip the first cell which is the metric name
+                    balanceSheet.data[cleanMetricName].push($bs(cell).text().trim());
+                }
+            });
+        });
+
+        console.log("Balance Sheet data scraped successfully");
         await browser.close();
         
         // Return all scraped data
-        res.json({ ratios, quarters, peers, profitLoss });
+        res.json({ ratios, quarters, peers, profitLoss, balanceSheet });
     } catch (error) {
         console.error("Error in scrapper route:", error);
         if (browser) {
