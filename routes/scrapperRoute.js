@@ -137,7 +137,7 @@ router.post("/scrapper", async (req, res) => {
 
         console.log("Starting puppeteer in Docker...");
         browser = await puppeteer.launch({
-            headless: false,
+            headless: "new",
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
