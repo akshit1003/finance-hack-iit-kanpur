@@ -2,6 +2,7 @@ import express from "express";
 import puppeteer from "puppeteer";
 import dotenv from "dotenv";
 import * as cheerio from "cheerio";
+import axios from "axios";
 
 dotenv.config();
 
@@ -112,8 +113,27 @@ router.post("/scrapper", async (req, res) => {
         const { name } = req.body;
         
         if (!name) {
-            return res.status(400).send("name is required in the request body");
+            return res.status(400).send("Company name is required in the request body");
         }
+
+        // First get the correct URL from the API
+        const searchResponse = await axios.get('https://www.screener.in/api/company/search/', {
+            params: {
+                q: name,
+                v: 3,
+                fts: 1
+            }
+        });
+
+        // Find the matching company in the search results
+        const matchingCompany = searchResponse.data.find(company => company.name === name);
+        
+        if (!matchingCompany) {
+            return res.status(404).send(`Company "${name}" not found`);
+        }
+
+        const url = matchingCompany.url;
+        console.log(`Found matching company URL: ${url}`);
 
         console.log("Starting puppeteer in Docker...");
         browser = await puppeteer.launch({
@@ -198,49 +218,39 @@ router.post("/scrapper", async (req, res) => {
             }
         }
 
-        console.log("Waiting for search box...");
-        await page.waitForSelector('#desktop-search > div > input', { timeout: 30000 });
+        // console.log("Waiting for search box...");
+        // await page.waitForSelector('#desktop-search > div > input', { timeout: 30000 });
         
-        console.log(`Typing company name: ${name}`);
-        await page.focus('#desktop-search > div > input');
-        await page.$eval('#desktop-search > div > input', el => el.value = '');
-        await page.type('#desktop-search > div > input', name);
+        // console.log(`Typing company name: ${name}`);
+        // await page.focus('#desktop-search > div > input');
+        // await page.$eval('#desktop-search > div > input', el => el.value = '');
+        // await page.type('#desktop-search > div > input', name);
         
-        console.log("Waiting for search dropdown...");
-        await page.waitForSelector('.dropdown-content li.active', { 
-            visible: true, 
-            timeout: 10000 
+        // console.log("Waiting for search dropdown...");
+        // await page.waitForSelector('.dropdown-content li.active', { 
+        //     visible: true, 
+        //     timeout: 10000 
+        // });
+        
+        // await delay(1000);
+        
+        // console.log("Clicking the first active result...");
+        // await page.click('.dropdown-content li.active');
+        
+        console.log(`Navigating to screener.in${url}...`);
+        await page.goto(`https://www.screener.in${url}`, {
+            waitUntil: ['networkidle0', 'domcontentloaded'],
+            timeout: 120000
         });
-        
-        await delay(1000);
-        
-        console.log("Clicking the first active result...");
-        await page.click('.dropdown-content li.active');
-        
-        console.log("Waiting for company page to load...");
-        try {
-            await Promise.race([
-                page.waitForSelector('.company-ratios', { timeout: 30000 }),
-                page.waitForSelector('.company-name', { timeout: 30000 })
-            ]);
-            
-            await delay(2000);
-            
-            const currentUrl = page.url();
-            if (!currentUrl.includes('/company/')) {
-                console.log("Not on company page, retrying...");
-                await page.click('.dropdown-content li.active');
-                await delay(2000);
-            }
-        } catch (error) {
-            console.log("Error waiting for company page:", error);
-            await page.screenshot({ path: 'error-state.png' });
-            throw error;
-        }
 
+        // Wait for the company ratios section to load
+        console.log("Waiting for company ratios to load...");
+        await page.waitForSelector('.company-ratios', { timeout: 30000 });
+
+        // Get the HTML content
         const html = await page.content();
-        console.log("HTML content length:", html.length);
         
+        // Load HTML into cheerio
         const $ = cheerio.load(html);
         const ratios = {};
 
@@ -294,5 +304,30 @@ router.post("/scrapper", async (req, res) => {
         res.status(500).send(`Scrapper error: ${error.message}`);
     }
 });
+
+router.get('/search/:p', async (req, res) => {
+    try {
+        const p = req.params.p;
+
+      // Make request to Screener.in API
+      const response = await axios.get('https://www.screener.in/api/company/search/', {
+        params: {
+          q: p,
+          v: 3,
+          fts: 1
+        }
+      });
+      
+      // Log the response data to console
+      console.log('Screener API Response:', response.data);
+      
+      // Send the data back to the client
+      res.json(response.data);
+    } catch (error) {
+      console.error('Error fetching data from Screener API:', error.message);
+      res.status(500).json({ error: 'Failed to fetch data from Screener API' });
+    }
+  });
+  
 
 export default router;
